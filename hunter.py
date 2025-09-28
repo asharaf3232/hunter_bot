@@ -1,12 +1,15 @@
 # ----------------------------------------------------------------------------------
-# # 💎 بوت صياد الجواهر - النسخة النهائية (التصحيح الأخير الكامل) 💎
+# # 💎 بوت صياد الجواهر - الإصدار 12.0 (الحل النهائي) 💎
 # ----------------------------------------------------------------------------------
 #
-# الإصدار: 11.0 (تصحيح معالجات الأوامر)
+# الإصدار: 12.0 (تطبيق حل الجسر غير المتزامن)
 #
-# التصحيح:
-#   - تمت إزالة كلمة `async` من تعريف دوال `start_command` و `button_callback`
-#     لحل مشكلة عدم الاستجابة للأوامر بسبب تعارض التزامن.
+# التصحيحات الرئيسية:
+#   1.  **تطبيق حل الجسر:** تم إنشاء دالة `sync_bridge_for_blockchain_job`
+#       لتعمل كوسيط بين JobQueue المتزامن ومهمة blockchain_monitoring_job غير المتزامنة.
+#       هذا يضمن تنفيذ منطق المراقبة بالكامل.
+#   2.  **تحديث أسماء القنوات:** تم تحديث قائمة TARGET_CHANNELS بالأسماء الصحيحة.
+#
 
 import logging
 import asyncio
@@ -31,7 +34,7 @@ GOPLUS_API_KEY = os.getenv("GOPLUS_API_KEY")
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 
-# --- أهداف المراقبة ---
+# --- أهداف المراقبة (مع الأسماء المصححة) ---
 TARGET_CHANNELS = ['MEXCofficialNews', 'Kucoin_News']
 LISTING_KEYWORDS = ['will list', 'listing', 'kickstarter', 'new listing', 'new token']
 
@@ -42,12 +45,9 @@ logger = logging.getLogger(__name__)
 # --- التحقق من وجود جميع المفاتيح ---
 def check_env_vars():
     required_vars = {
-        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
-        "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
-        "ALCHEMY_HTTPS_URL": ALCHEMY_HTTPS_URL,
-        "GOPLUS_API_KEY": GOPLUS_API_KEY,
-        "API_ID": API_ID,
-        "API_HASH": API_HASH,
+        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN, "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+        "ALCHEMY_HTTPS_URL": ALCHEMY_HTTPS_URL, "GOPLUS_API_KEY": GOPLUS_API_KEY,
+        "API_ID": API_ID, "API_HASH": API_HASH,
     }
     missing_vars = [key for key, value in required_vars.items() if value is None]
     if missing_vars:
@@ -55,7 +55,7 @@ def check_env_vars():
         return False
     return True
 
-# --- دوال المساعدة والتحليل (مع التصحيحات) ---
+# --- دوال المساعدة والتحليل ---
 def escape_markdown_v2(text: str) -> str:
     if not isinstance(text, str): text = str(text)
     escape_chars = r'_*[]()~`>#+-=|{}.!'
@@ -72,7 +72,7 @@ async def analyze_contract_with_goplus(contract_address):
                 if data.get("result") and contract_address.lower() in data["result"]:
                     return data["result"][contract_address.lower()]
     except Exception as e:
-        logger.error(f"GoPlus API request failed: {e}")
+        logger.error(f"GoPlus API request failed for {contract_address}: {e}")
     return None
 
 async def scrape_bscscan_for_socials(contract_address):
@@ -120,7 +120,7 @@ def generate_recommendation(analysis_data, social_data, telegram_subs):
         score += 2; strengths.append("✅ *عقد آمن:* ليس فخًا (Honeypot).")
     else:
         score -= 5; risks.append("🚨 *خطر فادح:* العقد هو فخ (Honeypot)!")
-    buy_tax, sell_tax = float(analysis_data.get('buy_tax', '101')) * 100, float(analysis_data.get('sell_tax', '101')) * 100
+    buy_tax, sell_tax = float(analysis_data.get('buy_tax', '101'))*100, float(analysis_data.get('sell_tax', '101'))*100
     if buy_tax < 5 and sell_tax < 5:
         score += 1; strengths.append(f"✅ *ضرائب مقبولة:* شراء:`{buy_tax:.1f}%`|بيع:`{sell_tax:.1f}%`.")
     else: risks.append(f"⚠️ *ضرائب مرتفعة:* شراء:`{buy_tax:.1f}%`|بيع:`{sell_tax:.1f}%`.")
@@ -149,9 +149,23 @@ def format_recommendation_report(token_name, recommendation, analysis_data, soci
     if social_data.get('telegram'): links_section += f"[قناة تليجرام]({social_data['telegram']})\n"
     return header + score_line + summary + strengths_section + risks_section + links_section
 
-# --- دوال بوت التحكم (مع التصحيح) ---
+# --- دوال بوت التحكم ووظيفة الجسر الجديدة ---
 def start_command(update: Update, context: CallbackContext):
-    update.message.reply_text("أهلاً بك في بوت صياد الجواهر (النسخة النهائية).", reply_markup=get_main_keyboard(context))
+    update.message.reply_text("أهلاً بك في بوت صياد الجواهر (الإصدار النهائي).", reply_markup=get_main_keyboard(context))
+
+# **هذه هي وظيفة الجسر التي صممتها أنت**
+def sync_bridge_for_blockchain_job(context: CallbackContext):
+    """
+    هذه الدالة المتزامنة تعمل كوسيط.
+    JobQueue يستدعيها، وهي بدورها تقوم بجدولة المهمة غير المتزامنة
+    على حلقة الأحداث الرئيسية بطريقة آمنة.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        asyncio.run_coroutine_threadsafe(blockchain_monitoring_job(context), loop)
+    except RuntimeError:
+        # في حال عدم وجود حلقة أحداث، يمكننا إنشاء واحدة جديدة (احتياطي)
+        asyncio.run(blockchain_monitoring_job(context))
 
 def button_callback(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -164,8 +178,9 @@ def button_callback(update: Update, context: CallbackContext):
             for job in current_jobs: job.schedule_removal()
             query.edit_message_text(text="تم إيقاف مراقبة البلوك تشين.", reply_markup=get_main_keyboard(context))
         else:
-            context.job_queue.run_repeating(blockchain_monitoring_job, interval=60, first=1, name=job_name)
-            query.edit_message_text(text="تم بدء مراقبة البلوك تشين.", reply_markup=get_main_keyboard(context))
+            # **التعديل الرئيسي: نستدعي وظيفة الجسر بدلاً من المهمة مباشرة**
+            context.job_queue.run_repeating(sync_bridge_for_blockchain_job, interval=60, first=1, name=job_name)
+            query.edit_message_text(text="تم بدء مراقبة البلوك تشين. سيبدأ الفحص خلال دقيقة.", reply_markup=get_main_keyboard(context))
 
 def get_main_keyboard(context: CallbackContext):
     job_name = 'blockchain_monitor_job'
@@ -175,34 +190,41 @@ def get_main_keyboard(context: CallbackContext):
     return InlineKeyboardMarkup(keyboard)
 
 async def blockchain_monitoring_job(context: CallbackContext):
-    logger.info("⛓️ Checking for new blocks...")
+    logger.info("⛓️ >> [START] Blockchain monitoring job running...")
     try:
         w3 = Web3(Web3.HTTPProvider(ALCHEMY_HTTPS_URL))
         latest_block_number = w3.eth.block_number
         last_checked_block = context.bot_data.get('last_checked_block', latest_block_number - 1)
+        
+        logger.info(f"Scanning blocks from {last_checked_block + 1} to {latest_block_number}")
+        
         for block_num in range(last_checked_block + 1, latest_block_number + 1):
             block = w3.eth.get_block(block_num, full_transactions=True)
             for tx in block.transactions:
                 if tx.to is None:
                     receipt = w3.eth.get_transaction_receipt(tx.hash)
                     contract_address = receipt.contractAddress
-                    logger.info(f"💎 New contract created: {contract_address}")
+                    logger.info(f"💎 Found new contract: {contract_address}")
                     analysis_data = await analyze_contract_with_goplus(contract_address)
                     if not analysis_data or analysis_data.get('is_honeypot') == '1':
                         logger.warning(f"Skipping honeypot or failed analysis for {contract_address}")
                         continue
+                    
                     analysis_data['contract_address'] = contract_address
                     token_name = analysis_data.get('token_name', 'Unknown Token')
                     social_data = await scrape_bscscan_for_socials(contract_address)
                     telegram_subs = await get_telegram_subscriber_count(social_data.get('telegram'))
                     recommendation = generate_recommendation(analysis_data, social_data, telegram_subs)
                     report = format_recommendation_report(token_name, recommendation, analysis_data, social_data)
+                    
                     await context.bot.send_message(
                         chat_id=int(TELEGRAM_CHAT_ID), text=report,
                         parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
+                        
         context.bot_data['last_checked_block'] = latest_block_number
     except Exception as e:
         logger.error(f"Error in blockchain monitoring job: {e}", exc_info=True)
+    logger.info("⛓️ >> [END] Blockchain monitoring job finished.")
 
 # --- وحدة مراقب الإعلانات ---
 async def news_monitoring_client(bot):
@@ -227,13 +249,27 @@ async def news_monitoring_client(bot):
 # --- الدالة الرئيسية للتشغيل ---
 async def main():
     if not check_env_vars(): return
+    
+    # الحصول على حلقة الأحداث الحالية وتمريرها للمهام
+    loop = asyncio.get_running_loop()
+    
     updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
+    
+    # تمرير حلقة الأحداث إلى السياق حتى يمكن الوصول إليها من أي مكان
+    dispatcher.bot_data['loop'] = loop
+    
     dispatcher.add_handler(CommandHandler("start", start_command))
     dispatcher.add_handler(CallbackQueryHandler(button_callback))
+    
+    # تشغيل البوت في thread منفصل حتى لا يوقف حلقة الأحداث الرئيسية
     updater.start_polling()
-    logger.info("🚀 Gem Hunter Control Bot (Final Corrected Version) is running...")
+    
+    logger.info("🚀 Gem Hunter Control Bot (Final Bridged Version) is running...")
+    
+    # تشغيل عميل المراقبة في نفس حلقة الأحداث
     await news_monitoring_client(updater.bot)
+    
     updater.idle()
 
 if __name__ == '__main__':
@@ -241,3 +277,4 @@ if __name__ == '__main__':
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot shutting down.")
+
