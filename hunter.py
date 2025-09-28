@@ -1,15 +1,16 @@
 # ----------------------------------------------------------------------------------
-# # 💎 بوت صياد الجواهر - الإصدار 12.0 (الحل النهائي) 💎
+# # 💎 بوت صياد الجواهر - الإصدار 13.0 (النسخة الكاملة والنهائية) 💎
 # ----------------------------------------------------------------------------------
 #
-# الإصدار: 12.0 (تطبيق حل الجسر غير المتزامن)
+# الإصدار: 13.0 (التوافق مع BNB وحل مشكلة async)
 #
-# التصحيحات الرئيسية:
-#   1.  **تطبيق حل الجسر:** تم إنشاء دالة `sync_bridge_for_blockchain_job`
-#       لتعمل كوسيط بين JobQueue المتزامن ومهمة blockchain_monitoring_job غير المتزامنة.
-#       هذا يضمن تنفيذ منطق المراقبة بالكامل.
-#   2.  **تحديث أسماء القنوات:** تم تحديث قائمة TARGET_CHANNELS بالأسماء الصحيحة.
-#
+# هذا الملف يحتوي على جميع التصحيحات التي توصلنا إليها:
+#   1. قراءة جميع المفاتيح من متغيرات البيئة.
+#   2. استخدام ملف جلسة تليثون لتسجيل الدخول التلقائي.
+#   3. حل مشكلة عدم استجابة الأوامر (إزالة async من المعالجات).
+#   4. تطبيق حل "الجسر" لتشغيل مهمة البلوك تشين غير المتزامنة بشكل صحيح.
+#   5. تحديث أسماء قنوات المراقبة.
+#   6. **الحل النهائي لمشكلة التوافق مع شبكة BNB (ExtraDataLengthError) بإضافة poa_middleware.**
 
 import logging
 import asyncio
@@ -20,6 +21,7 @@ from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
 from telegram.ext import Updater, CommandHandler, CallbackContext, CallbackQueryHandler
 from web3 import Web3
+from web3.middleware import geth_poa_middleware
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 
@@ -121,7 +123,7 @@ def generate_recommendation(analysis_data, social_data, telegram_subs):
     else:
         score -= 5; risks.append("🚨 *خطر فادح:* العقد هو فخ (Honeypot)!")
     buy_tax, sell_tax = float(analysis_data.get('buy_tax', '101'))*100, float(analysis_data.get('sell_tax', '101'))*100
-    if buy_tax < 5 and sell_tax < 5:
+    if buy_tax < 6 and sell_tax < 6:
         score += 1; strengths.append(f"✅ *ضرائب مقبولة:* شراء:`{buy_tax:.1f}%`|بيع:`{sell_tax:.1f}%`.")
     else: risks.append(f"⚠️ *ضرائب مرتفعة:* شراء:`{buy_tax:.1f}%`|بيع:`{sell_tax:.1f}%`.")
     if analysis_data.get('owner_address') in ['', '0x0000000000000000000000000000000000000000']:
@@ -149,23 +151,16 @@ def format_recommendation_report(token_name, recommendation, analysis_data, soci
     if social_data.get('telegram'): links_section += f"[قناة تليجرام]({social_data['telegram']})\n"
     return header + score_line + summary + strengths_section + risks_section + links_section
 
-# --- دوال بوت التحكم ووظيفة الجسر الجديدة ---
+# --- دوال بوت التحكم ووظيفة الجسر ---
 def start_command(update: Update, context: CallbackContext):
     update.message.reply_text("أهلاً بك في بوت صياد الجواهر (الإصدار النهائي).", reply_markup=get_main_keyboard(context))
 
-# **هذه هي وظيفة الجسر التي صممتها أنت**
 def sync_bridge_for_blockchain_job(context: CallbackContext):
-    """
-    هذه الدالة المتزامنة تعمل كوسيط.
-    JobQueue يستدعيها، وهي بدورها تقوم بجدولة المهمة غير المتزامنة
-    على حلقة الأحداث الرئيسية بطريقة آمنة.
-    """
     try:
-        loop = asyncio.get_running_loop()
+        loop = context.dispatcher.bot_data['loop']
         asyncio.run_coroutine_threadsafe(blockchain_monitoring_job(context), loop)
-    except RuntimeError:
-        # في حال عدم وجود حلقة أحداث، يمكننا إنشاء واحدة جديدة (احتياطي)
-        asyncio.run(blockchain_monitoring_job(context))
+    except Exception as e:
+        logger.error(f"Error in sync_bridge: {e}")
 
 def button_callback(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -178,9 +173,8 @@ def button_callback(update: Update, context: CallbackContext):
             for job in current_jobs: job.schedule_removal()
             query.edit_message_text(text="تم إيقاف مراقبة البلوك تشين.", reply_markup=get_main_keyboard(context))
         else:
-            # **التعديل الرئيسي: نستدعي وظيفة الجسر بدلاً من المهمة مباشرة**
-            context.job_queue.run_repeating(sync_bridge_for_blockchain_job, interval=60, first=1, name=job_name)
-            query.edit_message_text(text="تم بدء مراقبة البلوك تشين. سيبدأ الفحص خلال دقيقة.", reply_markup=get_main_keyboard(context))
+            context.job_queue.run_repeating(sync_bridge_for_blockchain_job, interval=60, first=10, name=job_name)
+            query.edit_message_text(text="تم بدء مراقبة البلوك تشين. سيبدأ الفحص خلال 10 ثوانٍ.", reply_markup=get_main_keyboard(context))
 
 def get_main_keyboard(context: CallbackContext):
     job_name = 'blockchain_monitor_job'
@@ -193,8 +187,11 @@ async def blockchain_monitoring_job(context: CallbackContext):
     logger.info("⛓️ >> [START] Blockchain monitoring job running...")
     try:
         w3 = Web3(Web3.HTTPProvider(ALCHEMY_HTTPS_URL))
+        # **الحل النهائي لمشكلة توافق BNB**
+        w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+        
         latest_block_number = w3.eth.block_number
-        last_checked_block = context.bot_data.get('last_checked_block', latest_block_number - 1)
+        last_checked_block = context.bot_data.get('last_checked_block', latest_block_number - 2)
         
         logger.info(f"Scanning blocks from {last_checked_block + 1} to {latest_block_number}")
         
@@ -204,6 +201,8 @@ async def blockchain_monitoring_job(context: CallbackContext):
                 if tx.to is None:
                     receipt = w3.eth.get_transaction_receipt(tx.hash)
                     contract_address = receipt.contractAddress
+                    if not contract_address: continue
+
                     logger.info(f"💎 Found new contract: {contract_address}")
                     analysis_data = await analyze_contract_with_goplus(contract_address)
                     if not analysis_data or analysis_data.get('is_honeypot') == '1':
@@ -223,7 +222,7 @@ async def blockchain_monitoring_job(context: CallbackContext):
                         
         context.bot_data['last_checked_block'] = latest_block_number
     except Exception as e:
-        logger.error(f"Error in blockchain monitoring job: {e}", exc_info=True)
+        logger.error(f"Error in blockchain monitoring job: {e}", exc_info=False)
     logger.info("⛓️ >> [END] Blockchain monitoring job finished.")
 
 # --- وحدة مراقب الإعلانات ---
@@ -250,24 +249,20 @@ async def news_monitoring_client(bot):
 async def main():
     if not check_env_vars(): return
     
-    # الحصول على حلقة الأحداث الحالية وتمريرها للمهام
     loop = asyncio.get_running_loop()
     
     updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
     
-    # تمرير حلقة الأحداث إلى السياق حتى يمكن الوصول إليها من أي مكان
     dispatcher.bot_data['loop'] = loop
     
     dispatcher.add_handler(CommandHandler("start", start_command))
     dispatcher.add_handler(CallbackQueryHandler(button_callback))
     
-    # تشغيل البوت في thread منفصل حتى لا يوقف حلقة الأحداث الرئيسية
     updater.start_polling()
     
-    logger.info("🚀 Gem Hunter Control Bot (Final Bridged Version) is running...")
+    logger.info("🚀 Gem Hunter Control Bot (v13.0 - Final) is running...")
     
-    # تشغيل عميل المراقبة في نفس حلقة الأحداث
     await news_monitoring_client(updater.bot)
     
     updater.idle()
@@ -277,4 +272,5 @@ if __name__ == '__main__':
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot shutting down.")
+
 
