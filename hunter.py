@@ -34,7 +34,7 @@ API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 
 # --- أهداف المراقبة ---
-TARGET_CHANNELS = ['MEXC_English', 'kucoin_news']
+TARGET_CHANNELS = ['MEXCofficialNews', 'Kucoin_News']
 LISTING_KEYWORDS = ['will list', 'listing', 'kickstarter', 'new listing', 'new token']
 
 # --- إعدادات التسجيل (Logging) ---
